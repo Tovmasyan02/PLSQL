@@ -49,10 +49,96 @@ begin
 end;
 
 
+/*3) Написать хранимую процедуру, которой передается ID сотрудника и которая увеличивает ему зарплату на 10%,
+если в 2000 году у сотрудника были продажи. Использовать выборку количества заказов за 2000 год в переменную.
+А затем, если переменная больше 0, выполнить update данных.*/
 
 
+ create or replace procedure pr_сheck_salary(p_employee_id employees.employee_id%type)
+  is
+    v_order_count int;
+  begin
+   /*Получаем количество заказов сотрудника с id p_employee_id за период 2000-2001 */
+    select  count(o.order_id)
+      into  v_order_count
+      from  orders o
+      where o.sales_rep_id = p_employee_id and
+            date'2000-01-01' <= o.order_date and o.order_date < date'2001-01-01';
+    /*если количество больше 0 то увеличиваем зарплату*/
+    if v_order_count > 0 then
+      update  employees e
+        set   e.salary = e.salary * 1.1
+        where e.employee_id = p_employee_id;
+    end if;
+  end;
+  
+/*4. Проверить корректность данных о заказах, а именно, что поле ORDER_TOTAL равно сумме UNIT_PRICE * QUANTITY 
+по позициям каждого заказа. Для этого создать хранимую процедуру, в которой будет в цикле for проход по всем заказам,
+далее по конкретному заказу отдельным select-запросом будет выбираться сумма по позициям данного заказа 
+и сравниваться с ORDER_TOTAL. Для «некорректных» заказов распечатать код заказа, дату заказа, заказчика и менеджера.
+*/
 
-6) 
+create or replace procedure pr_check_order_total
+  is
+    v_order_total orders.order_total%type;
+    v_real_price number;
+  begin
+  /*получаем все заказы в цикле*/
+    for i_order in (
+      select *
+        from orders
+    ) loop
+      v_order_total := i_order.order_total;
+      /* считаем реальную сумму заказ для каждого заказа*/
+      select  sum(oi.unit_price * oi.quantity)
+        into v_real_price
+        from  order_items oi
+        where oi.order_id = i_order.order_id;
+      /*проверяем если сумма заказа не правильный то вызываем функцию dbms_output*/
+      if v_real_price != v_order_total then
+        dbms_output.put_line(i_order.order_id || ' ' || i_order.order_date || ' ' || i_order.customer_id);
+      end if;
+    end loop;        
+  end;
+
+
+/*5) Переписать предыдущее задание с использованием явного курсора */ 
+create or replace procedure pr_check_order_total_with_cursor
+  is
+    /*Запрос явно объяляемь как курсор*/
+    cursor cursor_check is
+      select  o.order_id,
+              oi.real_price,
+              o.order_total,
+              o.customer_id,
+              o.order_date
+        from  orders o
+              join (select  sum(oi.unit_price * oi.quantity) as real_price,
+                            oi.order_id
+                      from  order_items oi
+                      group by oi.order_id
+              ) oi on
+                oi.order_id = o.order_id;
+                
+    v_order cursor_check%rowtype;
+  begin
+    /*открываем курсор*/
+    open cursor_check;
+    loop
+      /*проверяем для всех заказов total price*/
+      fetch cursor_check into v_order;
+      exit when cursor_check%notfound;
+      if v_order.order_total != v_order.real_price then
+        dbms_output.put_line(v_order.order_id || ' ' || v_order.order_date || ' ' || v_order.customer_id);
+      end if;
+    end loop;        
+  end;
+  
+
+
+/* 6) Написать функцию, в которой будет создан тестовый клиент, которому будет сделан заказ
+  на текущую дату из одной позиции каждого товара на складе. Имя тестового клиента и ID склада передаются в качестве параметров.
+  Функция возвращает ID созданного клиента.*/
 create or replace function fn_test(
      p_first_name in customers.cust_first_name%type,
      p_warehouse_id in warehouses.warehouse_id%type
@@ -153,10 +239,5 @@ create or replace function fn_test(
       where order_id = v_order_id;
     return v_customer_id;
   end;
-  
-  
-declare
-	begin
-	  dbms_output.put_line(fn_test('testName', 4));
-	end;
 	
+
