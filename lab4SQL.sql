@@ -105,7 +105,7 @@ create or replace procedure pr_check_order_total
 /*5) Переписать предыдущее задание с использованием явного курсора */ 
 create or replace procedure pr_check_order_total_with_cursor
   is
-    /*Запрос явно объяляемь как курсор*/
+    /*Запрос явно объяляем как курсор*/
     cursor cursor_check is
       select  o.order_id,
               oi.real_price,
@@ -139,7 +139,7 @@ create or replace procedure pr_check_order_total_with_cursor
 /* 6) Написать функцию, в которой будет создан тестовый клиент, которому будет сделан заказ
   на текущую дату из одной позиции каждого товара на складе. Имя тестового клиента и ID склада передаются в качестве параметров.
   Функция возвращает ID созданного клиента.*/
-create or replace function fn_test(
+create or replace function fn_test1(
      p_first_name in customers.cust_first_name%type,
      p_warehouse_id in warehouses.warehouse_id%type
   ) return customers.customer_id%type
@@ -188,7 +188,7 @@ create or replace function fn_test(
   Для этого выбрать склад в переменную типа «запись о складе» и перехватить исключение no_data_found, 
   если оно возникнет. В обработчике исключения выйти из функции, вернув null.
   */
-create or replace function fn_test(
+create or replace function fn_test2(
      p_first_name in customers.cust_first_name%type,
      p_warehouse_id in warehouses.warehouse_id%type
   ) return customers.customer_id%type
@@ -239,5 +239,267 @@ create or replace function fn_test(
       where order_id = v_order_id;
     return v_customer_id;
   end;
-	
+/*8. Написанные процедуры и функции объединить в пакет FIRST_PACKAGE.*/
+create or replace package first_package as
 
+function fn_check(i int,j int, k int);
+return Boolean
+
+procedure pr_сheck_salary(p_employee_id employees.employee_id%type);
+
+procedure pr_check_order_total;
+
+procedure pr_check_order_total_with_cursor;
+
+function fn_test1(
+     p_first_name in customers.cust_first_name%type,
+     p_warehouse_id in warehouses.warehouse_id%type
+  ) return customers.customer_id%type;
+
+function fn_test2(
+     p_first_name in customers.cust_first_name%type,
+     p_warehouse_id in warehouses.warehouse_id%type
+  ) return customers.customer_id%type;
+  
+create or replace package body first_package
+as
+
+function fn_check(i int,j int, k int)
+return Boolean
+IS
+exp_result Boolean;
+begin
+    exp_result:=i*i+j*j=k*k;
+    return exp_result;
+end; 
+
+
+procedure pr_сheck_salary(p_employee_id employees.employee_id%type)
+  is
+    v_order_count int;
+  begin
+   /*Получаем количество заказов сотрудника с id p_employee_id за период 2000-2001 */
+    select  count(o.order_id)
+      into  v_order_count
+      from  orders o
+      where o.sales_rep_id = p_employee_id and
+            date'2000-01-01' <= o.order_date and o.order_date < date'2001-01-01';
+    /*если количество больше 0 то увеличиваем зарплату*/
+    if v_order_count > 0 then
+      update  employees e
+        set   e.salary = e.salary * 1.1
+        where e.employee_id = p_employee_id;
+    end if;
+  end;
+  
+procedure pr_check_order_total
+  is
+    v_order_total orders.order_total%type;
+    v_real_price number;
+  begin
+  /*получаем все заказы в цикле*/
+    for i_order in (
+      select *
+        from orders
+    ) loop
+      v_order_total := i_order.order_total;
+      /* считаем реальную сумму заказ для каждого заказа*/
+      select  sum(oi.unit_price * oi.quantity)
+        into v_real_price
+        from  order_items oi
+        where oi.order_id = i_order.order_id;
+      /*проверяем если сумма заказа не правильный то вызываем функцию dbms_output*/
+      if v_real_price != v_order_total then
+        dbms_output.put_line(i_order.order_id || ' ' || i_order.order_date || ' ' || i_order.customer_id);
+      end if;
+    end loop;        
+  end;
+  
+procedure pr_check_order_total_with_cursor
+  is
+    /*Запрос явно объяляем как курсор*/
+    cursor cursor_check is
+      select  o.order_id,
+              oi.real_price,
+              o.order_total,
+              o.customer_id,
+              o.order_date
+        from  orders o
+              join (select  sum(oi.unit_price * oi.quantity) as real_price,
+                            oi.order_id
+                      from  order_items oi
+                      group by oi.order_id
+              ) oi on
+                oi.order_id = o.order_id;
+                
+    v_order cursor_check%rowtype;
+  begin
+    /*открываем курсор*/
+    open cursor_check;
+    loop
+      /*проверяем для всех заказов total price*/
+      fetch cursor_check into v_order;
+      exit when cursor_check%notfound;
+      if v_order.order_total != v_order.real_price then
+        dbms_output.put_line(v_order.order_id || ' ' || v_order.order_date || ' ' || v_order.customer_id);
+      end if;
+    end loop;        
+  end;
+
+
+function fn_test1(
+     p_first_name in customers.cust_first_name%type,
+     p_warehouse_id in warehouses.warehouse_id%type
+  ) return customers.customer_id%type
+  is 
+    v_customer_id customers.customer_id%type;
+    v_order_id orders.order_id%type;
+    v_line_item_id order_items.line_item_id%type := 1;
+    v_order_total orders.order_total%type := 0;
+  begin
+  
+    /* добавляем данные клиента в таблицу customers */
+    insert into customers (cust_first_name)
+      values (p_first_name)
+      returning customer_id into v_customer_id;
+	  
+	/* создаем новый заказ */
+    insert into orders (order_date, customer_id)
+      values (sysdate, v_customer_id)
+      returning order_id into v_order_id;
+    
+	/*в цикле получаем все продукты которые есть в складе с id warehouse_id количество которых >0*/
+    for productX in (
+      select pi.*
+        from  inventories i
+              join product_information pi on 
+                pi.product_id = i.product_id
+        where i.warehouse_id = p_warehouse_id and
+              i.quantity_on_hand > 0
+    ) loop
+	  /* оформляем заказ */
+      insert into order_items (order_id, line_item_id, product_id, unit_price, quantity)
+        values (v_order_id, v_line_item_id, productX.product_id, productX.list_price, 1);
+      v_line_item_id := v_line_item_id + 1;
+      v_order_total := v_order_total + productX.list_price;
+    end loop;
+    update  orders 
+       set  order_total = v_order_total
+      where order_id = v_order_id;
+    return v_customer_id;
+  end;
+  
+  
+function fn_test2(
+     p_first_name in customers.cust_first_name%type,
+     p_warehouse_id in warehouses.warehouse_id%type
+  ) return customers.customer_id%type
+  is 
+    v_customer_id customers.customer_id%type;
+    v_order_id orders.order_id%type;
+    v_line_item_id order_items.line_item_id%type := 1;
+    v_order_total orders.order_total%type := 0;
+  begin
+
+	/*Проверка */
+	begin
+      select  *
+        into  v_warehouse
+        from  warehouses w
+        where w.warehouse_id = p_warehouse_id;
+    exception
+    when no_data_found then
+      return null;
+    end;
+    /* добавляем данные клиента в таблицу customers */
+    insert into customers (cust_first_name)
+      values (p_first_name)
+      returning customer_id into v_customer_id;
+	  
+	/* создаем новый заказ */
+    insert into orders (order_date, customer_id)
+      values (sysdate, v_customer_id)
+      returning order_id into v_order_id;
+    
+	/*в цикле получаем все продукты которые есть в складе с id warehouse_id количество которых >0*/
+    for productX in (
+      select pi.*
+        from  inventories i
+              join product_information pi on 
+                pi.product_id = i.product_id
+        where i.warehouse_id = p_warehouse_id and
+              i.quantity_on_hand > 0
+    ) loop
+	  /* оформляем заказ */
+      insert into order_items (order_id, line_item_id, product_id, unit_price, quantity)
+        values (v_order_id, v_line_item_id, productX.product_id, productX.list_price, 1);
+      v_line_item_id := v_line_item_id + 1;
+      v_order_total := v_order_total + productX.list_price;
+    end loop;
+    update  orders 
+       set  order_total = v_order_total
+      where order_id = v_order_id;
+    return v_customer_id;
+  end;
+  
+  
+  
+
+	
+/*10. Написать функцию, которой передается sys_refcursor и которая по данному курсору формирует HTML-таблицу,
+содержащую информацию из курсора. Тип возвращаемого значения – clob.
+*/
+
+create or replace  function get_html_table(p_cursor in out sys_refcursor)
+    return clob
+  is
+    v_cursor sys_refcursor := p_cursor;
+    v_cn integer;
+    v_cols_desc dbms_sql.desc_tab2;
+    v_cols_count integer;
+    v_temp integer;
+    v_result clob;
+    v_str varchar2(1000);
+  begin
+    dbms_lob.createtemporary(v_result, true);
+  
+    v_cn := dbms_sql.to_cursor_number(v_cursor);
+    dbms_sql.describe_columns2(v_cn, v_cols_count, v_cols_desc);
+     
+    for i_index in 1 .. v_cols_count loop
+      dbms_sql.define_column(v_cn, i_index, v_str, 1000);
+    end loop;
+      
+    dbms_lob.append(v_result, '<table><tr>');
+    for i_index in 1..v_cols_count loop
+      dbms_lob.append(v_result, '<th>' || v_cols_desc(i_index).col_name || '</th>');
+    end loop;
+    dbms_lob.append(v_result, '</tr>');
+    
+    loop
+      v_temp:=dbms_sql.fetch_rows(v_cn);
+      exit when v_temp = 0;
+      
+      dbms_lob.append(v_result, '<tr>');
+      for i_index in 1 .. v_cols_count
+        loop
+          dbms_sql.column_value(v_cn, i_index, v_str);
+          dbms_lob.append(v_result, '<td>' || v_str || '</td>');
+        end loop;
+      dbms_lob.append(v_result, '</tr>');
+    end loop;
+    
+    dbms_lob.append(v_result, '</table>');
+    return v_result;
+  end;
+  
+declare
+  v_cursor sys_refcursor;
+  v_result clob; 
+begin
+  open v_cursor for
+    select c.* 
+      from countries c;
+  v_result := create_html_table(v_cursor);
+  dbms_output.put_line(v_result);
+end;
